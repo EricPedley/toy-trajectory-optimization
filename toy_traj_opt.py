@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.interpolate import CubicSpline
 
 waypoints = np.array([
     [1, 0],
@@ -26,6 +27,16 @@ def advance_state(current_state, input, dt = DELTA_T):
         pos + vel * dt + 0.5 * acc * dt**2,
         vel + acc * dt,
     ])
+
+def generate_spline_trajectory(waypoints):
+    # just return more waypoints that make a spline
+    x = waypoints[:, 0]
+    y = waypoints[:, 1]
+    t = np.linspace(0, 1, len(x))
+    cs_x = CubicSpline(t, x)
+    cs_y = CubicSpline(t, y)
+    t2 = np.linspace(0, 1, 4*len(x))
+    return np.array([cs_x(t2), cs_y(t2)]).T
 
 class Controller:
     def __init__(self, waypoints):
@@ -67,19 +78,31 @@ class Controller:
     def get_input(self):
         return self.input_x, self.input_y
 
-controller = Controller(waypoints)
 current_state = np.zeros(4, dtype=np.float32)
+pixel_size = 1000
+actual_bounds_xyw = [-1, -10, 21]
+def actual_to_pixel(x, y):
+    x = (x - actual_bounds_xyw[0]) / actual_bounds_xyw[2] * pixel_size
+    y = (y - actual_bounds_xyw[1]) / actual_bounds_xyw[2] * pixel_size
+    return int(x), int(y)
+
+# Draw spline
+spline_points = generate_spline_trajectory(waypoints)
+preview_img = np.zeros((pixel_size, pixel_size, 3), np.uint8)
+for i in range(len(spline_points)):
+    x, y = spline_points[i]
+    x, y = actual_to_pixel(x, y)
+    cv2.circle(preview_img, (x, y), 5, (255, 255, 0), -1)
+
+cv2.imshow('spline preview', preview_img)
+cv2.waitKey(0)
+
+controller = Controller(spline_points)
 
 while True:
     # Create a blank image
-    pixel_size = 1000
-    actual_bounds_xyw = [-1, -10, 21]
     img = np.zeros((pixel_size, pixel_size, 3), np.uint8)
 
-    def actual_to_pixel(x, y):
-        x = (x - actual_bounds_xyw[0]) / actual_bounds_xyw[2] * pixel_size
-        y = (y - actual_bounds_xyw[1]) / actual_bounds_xyw[2] * pixel_size
-        return int(x), int(y)
     
     # Draw waypoints
     for i in range(len(waypoints)):
