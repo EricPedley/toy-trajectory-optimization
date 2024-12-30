@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from scipy.optimize import least_squares
 
 waypoints = np.array([
     [1, 0],
@@ -8,6 +9,23 @@ waypoints = np.array([
     [16, 5],
 ])
 
+curr_time = 0
+dt = 1/30
+MAX_VEL = 5
+MAX_ACC = 5
+WP_TOLERANCE = 0.2
+
+def advance_state(current_state, input):
+    pos = current_state[:2]
+    vel = current_state[2:]
+    acc = np.array(input)
+    vel_mag = np.linalg.norm(vel)
+    if vel_mag > MAX_VEL:
+        vel = vel / vel_mag * MAX_VEL
+    return np.concatenate([
+        pos + vel * dt + 0.5 * acc * dt**2,
+        vel + acc * dt,
+    ])
 
 class Controller:
     def __init__(self, waypoints):
@@ -15,27 +33,39 @@ class Controller:
         self.current_waypoint = 0
         self.input_x, self.input_y = waypoints[0]
     
-    def update(self, current_pos):
-        if np.linalg.norm(current_pos - self.waypoints[self.current_waypoint]) < 1:
+    def update(self, current_state: np.ndarray):
+        current_pos = current_state[:2]
+        if np.linalg.norm(current_pos - self.waypoints[self.current_waypoint]) < WP_TOLERANCE:
             self.current_waypoint += 1
             if self.current_waypoint >= len(self.waypoints):
                 self.current_waypoint = 0
-        temp_x, temp_y = self.waypoints[self.current_waypoint] - current_pos
-        mag = np.linalg.norm([temp_x, temp_y])
-        mag_capped = max(1, mag)
-        self.input_x = temp_x / mag * mag_capped
-        self.input_y = temp_y / mag * mag_capped
+        INPUT_SCHEDULE_LENGTH = 20
+        def residuals(input_schedule):
+            simulated_state = current_state.copy()
+            for i in range(INPUT_SCHEDULE_LENGTH):
+                acc = input_schedule[i*2:i*2+2]
+                simulated_state = advance_state(simulated_state, acc)
+                if np.linalg.norm(simulated_state[:2] - self.waypoints[self.current_waypoint]) < WP_TOLERANCE:
+                    break
+            return simulated_state[:2] - self.waypoints[self.current_waypoint]
+        
+        best_input_schedule = least_squares(
+            residuals, 
+            np.zeros(INPUT_SCHEDULE_LENGTH*2),
+            bounds = (
+                [-MAX_ACC] * INPUT_SCHEDULE_LENGTH * 2,
+                [MAX_ACC] * INPUT_SCHEDULE_LENGTH * 2,
+            )
+        ).x
+
+        self.input_x, self.input_y = best_input_schedule[:2]
 
     
     def get_input(self):
         return self.input_x, self.input_y
 
 controller = Controller(waypoints)
-current_pos = np.array([0,0], dtype=np.float32)
-current_vel = np.array([0,0], dtype=np.float32)
-
-dt = 1/30
-MAX_VEL = 5
+current_state = np.zeros(4, dtype=np.float32)
 
 while True:
     # Create a blank image
@@ -56,18 +86,19 @@ while True:
         cv2.putText(img, str(i), (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     
     # Draw current position
-    controller.update(current_pos)
+    controller.update(current_state)
 
     input_x, input_y = controller.get_input()
 
-    current_vel += np.array([input_x, input_y]) * dt
-    vel_mag = np.linalg.norm(current_vel)
-    if vel_mag > MAX_VEL:
-        current_vel = current_vel / vel_mag * MAX_VEL
-    current_pos += current_vel * dt
+    acc = np.array([input_x, input_y])
+    current_state = advance_state(current_state, acc)
 
-    pixel_x, pixel_y = actual_to_pixel(current_pos[0], current_pos[1])
+    pixel_x, pixel_y = actual_to_pixel(current_state[0], current_state[1])
     cv2.circle(img, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
+
+    curr_time += dt
+    cv2.putText(img, f"Time: {curr_time:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    cv2.putText(img, f"Vel: {np.linalg.norm(current_state[2:]):.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
     cv2.imshow('image', img)
     cv2.waitKey(1)
