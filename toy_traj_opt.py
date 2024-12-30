@@ -10,12 +10,12 @@ waypoints = np.array([
 ])
 
 curr_time = 0
-dt = 1/30
+DELTA_T = 1/30
 MAX_VEL = 5
 MAX_ACC = 5
 WP_TOLERANCE = 0.2
 
-def advance_state(current_state, input):
+def advance_state(current_state, input, dt = DELTA_T):
     pos = current_state[:2]
     vel = current_state[2:]
     acc = np.array(input)
@@ -32,26 +32,29 @@ class Controller:
         self.waypoints = waypoints
         self.current_waypoint = 0
         self.input_x, self.input_y = waypoints[0]
+        self.last_sln = None
     
     def update(self, current_state: np.ndarray):
         current_pos = current_state[:2]
         if np.linalg.norm(current_pos - self.waypoints[self.current_waypoint]) < WP_TOLERANCE:
             self.current_waypoint += 1
+            self.last_sln = None
             if self.current_waypoint >= len(self.waypoints):
                 self.current_waypoint = 0
-        INPUT_SCHEDULE_LENGTH = 20
+        INPUT_SCHEDULE_LENGTH = 10
         def residuals(input_schedule):
             simulated_state = current_state.copy()
             for i in range(INPUT_SCHEDULE_LENGTH):
                 acc = input_schedule[i*2:i*2+2]
-                simulated_state = advance_state(simulated_state, acc)
+                simulated_state = advance_state(simulated_state, acc, 2*DELTA_T)
                 if np.linalg.norm(simulated_state[:2] - self.waypoints[self.current_waypoint]) < WP_TOLERANCE:
                     break
             return simulated_state[:2] - self.waypoints[self.current_waypoint]
-        
+
+        initial_guess = np.zeros(INPUT_SCHEDULE_LENGTH*2) if self.last_sln is None else self.last_sln 
         best_input_schedule = least_squares(
             residuals, 
-            np.zeros(INPUT_SCHEDULE_LENGTH*2),
+            initial_guess,
             bounds = (
                 [-MAX_ACC] * INPUT_SCHEDULE_LENGTH * 2,
                 [MAX_ACC] * INPUT_SCHEDULE_LENGTH * 2,
@@ -96,7 +99,7 @@ while True:
     pixel_x, pixel_y = actual_to_pixel(current_state[0], current_state[1])
     cv2.circle(img, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
 
-    curr_time += dt
+    curr_time += DELTA_T
     cv2.putText(img, f"Time: {curr_time:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     cv2.putText(img, f"Vel: {np.linalg.norm(current_state[2:]):.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
