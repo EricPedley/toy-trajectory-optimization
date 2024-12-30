@@ -41,26 +41,27 @@ def generate_spline_trajectory(waypoints):
 class Controller:
     def __init__(self, waypoints):
         self.waypoints = waypoints
-        self.current_waypoint = 0
+        self.current_waypoint_idx = 0
         self.input_x, self.input_y = waypoints[0]
         self.last_sln = None
     
     def update(self, current_state: np.ndarray):
         current_pos = current_state[:2]
-        if np.linalg.norm(current_pos - self.waypoints[self.current_waypoint]) < WP_TOLERANCE:
-            self.current_waypoint += 1
+        if np.linalg.norm(current_pos - self.waypoints[self.current_waypoint_idx]) < WP_TOLERANCE:
+            self.current_waypoint_idx += 1
             self.last_sln = None
-            if self.current_waypoint >= len(self.waypoints):
-                self.current_waypoint = 0
+            if self.current_waypoint_idx >= len(self.waypoints):
+                self.current_waypoint_idx = 0
         INPUT_SCHEDULE_LENGTH = 10
         def residuals(input_schedule):
             simulated_state = current_state.copy()
+            simulated_waypoint_idx = self.current_waypoint_idx
             for i in range(INPUT_SCHEDULE_LENGTH):
                 acc = input_schedule[i*2:i*2+2]
                 simulated_state = advance_state(simulated_state, acc, 2*DELTA_T)
-                if np.linalg.norm(simulated_state[:2] - self.waypoints[self.current_waypoint]) < WP_TOLERANCE:
-                    break
-            return simulated_state[:2] - self.waypoints[self.current_waypoint]
+                if np.linalg.norm(simulated_state[:2] - self.waypoints[simulated_waypoint_idx]) < WP_TOLERANCE:
+                    simulated_waypoint_idx = min(simulated_waypoint_idx + 1, len(self.waypoints) - 1)
+            return simulated_state[:2] - self.waypoints[simulated_waypoint_idx]
 
         initial_guess = np.zeros(INPUT_SCHEDULE_LENGTH*2) if self.last_sln is None else self.last_sln 
         best_input_schedule = least_squares(
