@@ -1,10 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import CubicSpline
+from scipy.optimize import minimize
 
 # Point Mass Dynamics
 class PointMass:
-    def __init__(self, mass=1.0, dt=0.1):
+    def __init__(self, mass=1.0, dt=0.5):
         self.mass = mass
         self.dt = dt
         self.position = np.array([0.0, 0.0])  # [x, y]
@@ -21,26 +22,71 @@ class PointMass:
 
 # Trajectory Optimizer (Generates smooth setpoints from waypoints)
 class TrajectoryOptimizer:
-    def __init__(self, waypoints, total_time=10.0):
+    def __init__(self, waypoints, total_time=10.0, dt=0.5):
         self.waypoints = waypoints
         self.total_time = total_time
-        self.time_points = np.linspace(0, total_time, len(waypoints))
+        self.dt = dt
+        self.time_points = np.arange(0, total_time / dt, dt)
+        self.num_steps = len(self.time_points)
 
-        # Fit cubic splines for x and y trajectories
-        self.x_spline = CubicSpline(self.time_points, waypoints[:, 0])
-        self.y_spline = CubicSpline(self.time_points, waypoints[:, 1])
+    def optimize_trajectory(self):
+        # Optimization variables: [x0, y0, vx0, vy0, ax0, ay0, x1, y1, vx1, vy1, ax1, ay1, ...]
+        num_vars = 6 * self.num_steps  # 6 variables per step (x, y, vx, vy, ax, ay)
+        x0 = np.zeros(num_vars)  # Initial guess (all zeros)
 
-    def generate_setpoints(self, t):
-        # Position
-        position = np.array([self.x_spline(t), self.y_spline(t)])
+        # Bounds for optimization variables
+        bounds = [(None, None)] * num_vars  # No bounds (can be customized)
 
-        # Velocity (first derivative)
-        velocity = np.array([self.x_spline(t, 1), self.y_spline(t, 1)])
+        # Constraints (waypoints and dynamics)
+        constraints = []
+        for i, wp in enumerate(self.waypoints):
+            t_index = int(i * (self.num_steps - 1) / (len(self.waypoints) - 1))  # Spread waypoints evenly
+            constraints.append({
+                'type': 'eq',
+                'fun': lambda x, idx=t_index, target=wp: np.array([x[6 * idx] - target[0], x[6 * idx + 1] - target[1]])
+            })
 
-        # Acceleration (second derivative)
-        acceleration = np.array([self.x_spline(t, 2), self.y_spline(t, 2)])
+        # Cost function: Minimize jerk (third derivative of position)
+        def cost_function(x):
+            jerk = 0.0
+            for t in range(1, self.num_steps - 1):
+                ax_prev, ay_prev = x[6 * (t - 1) + 4], x[6 * (t - 1) + 5]
+                ax_curr, ay_curr = x[6 * t + 4], x[6 * t + 5]
+                ax_next, ay_next = x[6 * (t + 1) + 4], x[6 * (t + 1) + 5]
+                jerk += (ax_next - 2 * ax_curr + ax_prev)**2 + (ay_next - 2 * ay_curr + ay_prev)**2
+            return jerk
 
-        return np.array([position, velocity, acceleration])
+        # Dynamics constraints
+        def dynamics_constraints(x):
+            constraints = []
+            for t in range(self.num_steps - 1):
+                x_curr, y_curr = x[6 * t], x[6 * t + 1]
+                vx_curr, vy_curr = x[6 * t + 2], x[6 * t + 3]
+                ax_curr, ay_curr = x[6 * t + 4], x[6 * t + 5]
+                x_next, y_next = x[6 * (t + 1)], x[6 * (t + 1) + 1]
+                vx_next, vy_next = x[6 * (t + 1) + 2], x[6 * (t + 1) + 3]
+                ax_next, ay_next = x[6 * (t + 1) + 4], x[6 * (t + 1) + 5]
+
+                # Position update
+                constraints.append(x_next - (x_curr + vx_curr * self.dt))
+                constraints.append(y_next - (y_curr + vy_curr * self.dt))
+
+                # Velocity update
+                constraints.append(vx_next - (vx_curr + ax_curr * self.dt))
+                constraints.append(vy_next - (vy_curr + ay_curr * self.dt))
+
+            return np.array(constraints)
+
+        constraints.append({'type': 'eq', 'fun': dynamics_constraints})
+
+        # Solve the optimization problem
+        result = minimize(cost_function, x0, bounds=bounds, constraints=constraints, method='SLSQP')
+        if not result.success:
+            raise ValueError("Optimization failed!")
+
+        # Extract the optimized trajectory
+        optimized_trajectory = result.x.reshape(-1, 6)  # Reshape to [num_steps, 6]
+        return optimized_trajectory
 
 # Abstract Controller Interface
 class Controller:
@@ -76,17 +122,19 @@ class PIDController(Controller):
         return control
 
 # Simulation
-def simulate(trajectory_optimizer: TrajectoryOptimizer, controller: Controller, dt=0.1, total_time=10.0):
+def simulate(optimized_trajectory: np.ndarray, controller: Controller, dt=0.5, total_time=10.0):
     point_mass = PointMass(dt=dt)
     time_steps = int(total_time / dt)
     trajectory = []
+
+    # Generate optimized trajectory
 
     for t in range(time_steps):
         current_time = t * dt
         current_state = point_mass.get_state()
 
-        # Generate setpoints from the trajectory optimizer
-        setpoint_state = trajectory_optimizer.generate_setpoints(current_time)
+        # Get setpoints from the optimized trajectory
+        setpoint_state = optimized_trajectory[t, :2], optimized_trajectory[t, 2:4], optimized_trajectory[t, 4:6]
 
         # Compute control input
         acceleration = controller.compute_control(current_state, setpoint_state)
@@ -104,7 +152,7 @@ def plot_trajectory(target_trajectory, unrolled_trajectory, waypoints):
     plt.figure(figsize=(8, 6))
 
     # Plot trajectory with viridis colormap
-    plt.scatter(target_trajectory[0,0,:], target_trajectory[0,1,:], c=np.linspace(0,1,target_trajectory.shape[2]), label="Target Trajectory")
+    plt.scatter(target_trajectory[:,0], target_trajectory[:,1], c=np.linspace(0,1,target_trajectory.shape[0]), label="Target Trajectory")
     plt.scatter(unrolled_trajectory[:,0], unrolled_trajectory[:,1], c=np.linspace(0,1,len(unrolled_trajectory)), marker="x", label="Followed Trajectory")
 
     # Plot waypoints
@@ -136,6 +184,7 @@ if __name__ == "__main__":
     # controller = PIDController(kp=1.0, ki=0.0, kd=0.1)  # Feedback control
 
     # Run simulation
-    followed_trajectory = simulate(trajectory_optimizer, controller, dt=0.1, total_time=10.0)
-    generated_trajectory = trajectory_optimizer.generate_setpoints(np.linspace(0, 10, len(followed_trajectory)))
-    plot_trajectory(generated_trajectory, followed_trajectory, waypoints)
+
+    optimized_trajectory = trajectory_optimizer.optimize_trajectory()
+    followed_trajectory = simulate(optimized_trajectory, controller, dt=0.5, total_time=10.0)
+    plot_trajectory(optimized_trajectory, followed_trajectory, waypoints)
