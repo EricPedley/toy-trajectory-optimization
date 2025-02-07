@@ -26,7 +26,7 @@ class TrajectoryOptimizer:
         self.waypoints = waypoints
         self.total_time = total_time
         self.dt = dt
-        self.time_points = np.arange(0, total_time / dt, dt)
+        self.time_points = np.arange(0, total_time / dt)
         self.num_steps = len(self.time_points)
 
     def optimize_trajectory(self):
@@ -164,7 +164,7 @@ def plot_trajectory(target_trajectory, unrolled_trajectory, waypoints):
 
     # Plot trajectory with viridis colormap
     plt.scatter(target_trajectory[:,0], target_trajectory[:,1], c=np.linspace(0,1,target_trajectory.shape[0]), label="Target Trajectory")
-    plt.scatter(unrolled_trajectory[:,0], unrolled_trajectory[:,1], c=np.linspace(0,1,len(unrolled_trajectory)), marker="x", label="Followed Trajectory", s=2)
+    plt.scatter(unrolled_trajectory[:,0], unrolled_trajectory[:,1], c=np.linspace(0,1,len(unrolled_trajectory)), marker="x", label="Followed Trajectory", s=80)
 
     # Plot waypoints
     plt.scatter(waypoints[:, 0], waypoints[:, 1], color="red", s=100, label="Waypoints")
