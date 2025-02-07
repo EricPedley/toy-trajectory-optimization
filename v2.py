@@ -76,8 +76,19 @@ class TrajectoryOptimizer:
                 constraints.append(vy_next - (vy_curr + ay_curr * self.dt))
 
             return np.array(constraints)
+        
 
         constraints.append({'type': 'eq', 'fun': dynamics_constraints})
+
+        # Initial conditions constraints. Initial position is already covered by waypoints constraints, and adding it here makes the solver fail because of the redundancy
+        def initial_constraints(x):
+            constraints = []
+            constraints.append(x[2] - 0)
+            constraints.append(x[3] - 0)
+        
+            return np.array(constraints)
+        
+        constraints.append({'type': 'eq', 'fun': initial_constraints})
 
         # Solve the optimization problem
         result = minimize(cost_function, x0, bounds=bounds, constraints=constraints, method='SLSQP')
@@ -153,7 +164,7 @@ def plot_trajectory(target_trajectory, unrolled_trajectory, waypoints):
 
     # Plot trajectory with viridis colormap
     plt.scatter(target_trajectory[:,0], target_trajectory[:,1], c=np.linspace(0,1,target_trajectory.shape[0]), label="Target Trajectory")
-    plt.scatter(unrolled_trajectory[:,0], unrolled_trajectory[:,1], c=np.linspace(0,1,len(unrolled_trajectory)), marker="x", label="Followed Trajectory")
+    plt.scatter(unrolled_trajectory[:,0], unrolled_trajectory[:,1], c=np.linspace(0,1,len(unrolled_trajectory)), marker="x", label="Followed Trajectory", s=2)
 
     # Plot waypoints
     plt.scatter(waypoints[:, 0], waypoints[:, 1], color="red", s=100, label="Waypoints")
